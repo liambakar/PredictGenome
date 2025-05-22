@@ -1,0 +1,218 @@
+import os
+import pandas as pd
+import xgboost as xgb
+from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import make_scorer
+from lifelines.utils import concordance_index
+import numpy as np
+
+base_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'clinical_csv')
+cv_folders = [f for f in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, f))]
+
+results = []
+
+def feature_selection(df):
+    """
+    Select features related to survival analysis
+    """
+    # Define features related to survival analysis (based on TCGA data)
+    survival_related_features = [
+        # Demographic features
+        'age_at_initial_pathologic_diagnosis',
+        'sex',
+        'race',
+        'birth_days_to',
+        
+        # Tumor features
+        'tumor_type',
+        'cancer_type_detailed',
+        'histological_type', 
+        'histological_grade',
+        'ajcc_pathologic_tumor_stage',
+        'clinical_stage',
+        'OncotreeCode',
+        'OncoTreeSiteCode',
+        'site_of_resection_or_biopsy',
+        'tissue_source_site',
+        
+        # Treatment-related features
+        'treatment_outcome_first_course',
+        'margin_status',
+        'residual_tumor',
+        'tumor_status',
+        
+        # Other clinical features
+        'menopause_status',
+        'new_tumor_event_type',
+        'new_tumor_event_site',
+        'cause_of_death',
+        'initial_pathologic_dx_year',
+        
+        # Survival-related (but not including censorship and survival fields)
+        'vital_status',
+        'death_days_to', 
+        'last_contact_days_to',
+        'new_tumor_event_dx_days_to'
+    ]
+    
+    # Columns to exclude
+    drop_cols = [col for col in df.columns if 
+                 'survival' in col.lower() or 
+                 'censorship' in col.lower() or
+                 col in ['case_id', 'slide_id', 'submitter_id', 'disc_label']]
+    
+    available_cols = [col for col in df.columns if col not in drop_cols]
+    
+    priority_features = [col for col in survival_related_features if col in available_cols]
+    
+    other_features = [col for col in available_cols if col not in priority_features]
+    
+    selected_features = priority_features + other_features
+    
+    return selected_features, priority_features, other_features, drop_cols
+
+def preprocess_features(df, feature_cols):
+    """
+    Preprocess feature data
+    """
+    processed_df = df[feature_cols].copy()
+    
+    # Process categorical variables
+    categorical_cols = []
+    numerical_cols = []
+    
+    for col in feature_cols:
+        if col in processed_df.columns:
+            if processed_df[col].dtype == 'object' or processed_df[col].dtype.name == 'category':
+                categorical_cols.append(col)
+            else:
+                numerical_cols.append(col)
+    
+    # Encode categorical variables
+    label_encoders = {}
+    for col in categorical_cols:
+        le = LabelEncoder()
+        # Handle missing values
+        processed_df[col] = processed_df[col].fillna('Unknown')
+        processed_df[col] = le.fit_transform(processed_df[col].astype(str))
+        label_encoders[col] = le
+    
+    # Handle missing values in numerical variables
+    for col in numerical_cols:
+        processed_df[col] = processed_df[col].fillna(processed_df[col].median())
+    
+    return processed_df, label_encoders, categorical_cols, numerical_cols
+
+# Main processing logic
+for folder in cv_folders:
+    folder_path = os.path.join(base_dir, folder)
+    train_path = os.path.join(folder_path, 'train.csv')
+    test_path = os.path.join(folder_path, 'test.csv')
+    
+    if os.path.exists(train_path) and os.path.exists(test_path):
+        print(f"\n=== Processing folder: {folder} ===")
+        
+        # Read data
+        train_df = pd.read_csv(train_path)
+        test_df = pd.read_csv(test_path)
+        
+        print("Train shape:", train_df.shape)
+        print("Test shape:", test_df.shape)
+        
+        # Feature selection
+        selected_features, priority_features, other_features, dropped_cols = feature_selection(train_df)
+        
+        print(f"\nFeature selection results:")
+        print(f"- Total feature count: {len(selected_features)}")
+        print(f"- Priority feature count (survival analysis related): {len(priority_features)}")
+        print(f"- Other feature count: {len(other_features)}")
+        print(f"- Excluded column count: {len(dropped_cols)}")
+        
+        print(f"\nPriority features (survival analysis related):")
+        for feature in priority_features:
+            missing_pct = (train_df[feature].isnull().sum() / len(train_df)) * 100
+            print(f"  - {feature}: Missing values {missing_pct:.1f}%")
+        
+        if other_features:
+            print(f"\nOther available features:")
+            for feature in other_features[:10]:  # Only show the first 10
+                missing_pct = (train_df[feature].isnull().sum() / len(train_df)) * 100
+                print(f"  - {feature}: Missing values {missing_pct:.1f}%")
+            if len(other_features) > 10:
+                print(f"  ... {len(other_features) - 10} more other features")
+        
+        print(f"\nLabel (disc_label) distribution:")
+        print(train_df['disc_label'].value_counts())
+        
+        # Preprocess features
+        X_train, label_encoders, cat_cols, num_cols = preprocess_features(train_df, selected_features)
+        X_test, _, _, _ = preprocess_features(test_df, selected_features)
+        y_train = train_df['disc_label']
+        y_test = test_df['disc_label'] if 'disc_label' in test_df.columns else None
+        
+        print(f"\nPost-processing:")
+        print(f"X_train shape: {X_train.shape}")
+        print(f"X_test shape: {X_test.shape}")
+        print(f"Categorical feature count: {len(cat_cols)}")
+        print(f"Numerical feature count: {len(num_cols)}")
+        
+        # Data quality check
+        print(f"\nData quality:")
+        print(f"Training set missing values: {X_train.isnull().sum().sum()}")
+        print(f"Test set missing values: {X_test.isnull().sum().sum()}")
+        
+        # Remove samples with NaN labels
+        mask_train = ~y_train.isnull()
+        X_train = X_train[mask_train]
+        y_train = y_train[mask_train]
+        
+        if y_test is not None:
+            mask_test = ~y_test.isnull()
+            X_test = X_test[mask_test]
+            y_test = y_test[mask_test]
+        
+        # Save processing results to dictionary for later use
+        fold_result = {
+            'folder': folder,
+            'X_train': X_train,
+            'X_test': X_test,
+            'y_train': y_train,
+            'y_test': y_test,
+            'feature_names': selected_features,
+            'priority_features': priority_features,
+            'label_encoders': label_encoders,
+            'categorical_features': cat_cols,
+            'numerical_features': num_cols
+        }
+        
+        results.append(fold_result)
+        
+        for i, fold_data in enumerate(results):
+            print(f"Training fold {i+1}")
+            
+            X_train = fold_data['X_train']
+            X_test = fold_data['X_test'] 
+            y_train = fold_data['y_train']
+            y_test = fold_data['y_test']
+            
+            # XGBoost model
+            model = xgb.XGBClassifier(
+                objective='multi:softprob',
+                eval_metric='mlogloss',
+                random_state=42
+            )
+            
+            model.fit(X_train, y_train)
+            # Predict probabilities
+            y_pred_proba = model.predict_proba(X_test)
+            # Take the probability of the predicted maximum probability class as risk score
+            risk_score = y_pred_proba.max(axis=1)
+            # Calculate c-index (use risk_score and true labels)
+            if y_test is not None and len(np.unique(y_test)) > 1:
+                cidx = concordance_index(y_test, risk_score)
+                print(f"c-index: {cidx:.4f}")
+            else:
+                print("Cannot compute c-index (not enough classes in y_test)")
+            # predictions = model.predict(X_test)
+            # print(predictions)
+            
