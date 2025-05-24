@@ -116,7 +116,7 @@ def create_gene_survival_model():
 
 if __name__ == "__main__":
     save_dir = './models/checkpoints'
-    gene_path = './data_csvs/rna/hallmarks/BRCA/rna_clean.csv'
+    gene_path = './data_csvs/rna/rna_clean.csv'
     clinical_path = './data_csvs/TCGA_BRCA_overall_survival_k=0'
 
     print(
@@ -139,6 +139,9 @@ if __name__ == "__main__":
 
         assert 'case_id' in train_df.columns, "case_id not found in train_df"
         assert 'case_id' in test_df.columns, "case_id not found in test_df"
+
+        # remove suffix from sample to match test and train case_id
+        gene_df['sample'] = gene_df['sample'].str[:-3]
 
         train_df = pd.merge(train_df, gene_df,
                             left_on='case_id', right_on='sample', how='left')

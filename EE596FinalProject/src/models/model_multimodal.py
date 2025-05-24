@@ -273,7 +273,7 @@ class coattn(nn.Module):
 
         self.classifier = nn.Linear(in_dim, self.num_classes, bias=False)
 
-    def forward_no_loss(self, x_path, x_omics, return_attn=False):
+    def forward_no_loss(self, x_omics, return_attn=False):
         """
         Args:
             x_path: (B, numOfproto, in_dim) in_dim = [prob, mean, cov] (If OT, prob will be uniform, cov will be none)
@@ -281,7 +281,7 @@ class coattn(nn.Module):
             return_attn:
 
         """
-        device = x_path.device
+        device = x_omics.device
 
         # Pathway embeddings
         h_omic = []  # each omic signature goes through it's own FC layer
@@ -296,10 +296,6 @@ class coattn(nn.Module):
                 arr.append(
                     torch.cat([h_omic[idx:idx + 1], self.gene_embedding.to(device)], dim=-1))
             h_omic = torch.cat(arr, dim=0)
-
-        # Histology embeddings
-        # Project wsi to smaller dimension (same as pathway dimension)
-        h_path = self.path_proj_net(x_path)
 
         if self.histo_embedding is not None:    # Append histo prototype encoding
             arr = []
@@ -351,9 +347,9 @@ class coattn(nn.Module):
 
         return out
 
-    def forward(self, x_path, x_omics, return_attn=False, attn_mask=None, label=None, censorship=None, loss_fn=None):
+    def forward(self, x_omics, return_attn=False, attn_mask=None, label=None, censorship=None, loss_fn=None):
 
-        out = self.forward_no_loss(x_path, x_omics, return_attn)
+        out = self.forward_no_loss(x_omics, return_attn)
         results_dict, log_dict = process_surv(
             out['logits'], label, censorship, loss_fn)
         if return_attn:

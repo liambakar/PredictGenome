@@ -20,7 +20,7 @@ else:
 
 def get_gene_data(batch, device):
     gene_data = []
-    with open('./data_csvs/rna/hallmarks/BRCA/rna_clean.csv', 'r') as f:
+    with open('./data_csvs/rna/rna_clean.csv', 'r') as f:
         first_line = f.readline().strip()
         gene_names = first_line.split(',')[2:]
     for key in gene_names:
