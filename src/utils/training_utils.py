@@ -67,12 +67,12 @@ def print_network(net: torch.nn.Module) -> None:
     print(f'Total number of trainable parameters: {num_params_train}')
 
 
-def save_checkpoint(epoch: int, model: torch.nn.Module, score: float, save_dir: str) -> None:
+def save_checkpoint(fold: int, model: torch.nn.Module, score: float, save_dir: str) -> None:
     save_state = {
         'model': model.state_dict(),
         'score': score,
-        'epoch': epoch
+        'fold': fold
     }
-    save_path = os.path.join(save_dir, f'ckpt_epoch_{epoch}.pth')
+    save_path = os.path.join(save_dir, f'ckpt_fold_{fold}.pth')
 
     torch.save(save_state, save_path)

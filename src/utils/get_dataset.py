@@ -48,12 +48,9 @@ def get_folded_rna_dataset():
             print(f'Train shape: {train_merged.shape}')
             print(f'Test shape: {test_merged.shape}')
 
-            print(test_df.head())
-            print(test_merged.head())
-
             folds.append({'train': train_merged, 'test': test_merged})
 
-    print(f'\nSuccessfully retrieved {len(folds)} folds.')
+    print(f'\nSuccessfully retrieved {len(folds)} folds.\n')
 
     return folds
 
@@ -64,10 +61,10 @@ class OnlyGenomicDataset(Dataset):
         self.feature_cols = feature_cols
         self.label_col = label_col
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.df)
 
-    def __getitem__(self, index):
+    def __getitem__(self, index) -> tuple[torch.Tensor, torch.Tensor]:
         features = torch.tensor(
             self.df.loc[index, self.feature_cols].values.tolist(), dtype=torch.float32
         )
@@ -76,6 +73,12 @@ class OnlyGenomicDataset(Dataset):
         )
         return features, label
 
+    def get_labels(self) -> torch.Tensor:
+        return torch.tensor(self.df[self.label_col].values, dtype=torch.float32)
+
+    def get_features(self) -> torch.Tensor:
+        return torch.tensor(self.df[self.feature_cols].values.tolist(), dtype=torch.float32)
+
 
 def convert_df_to_dataloader(
     df: dict,
@@ -83,8 +86,8 @@ def convert_df_to_dataloader(
     list[str],
     label_col: str,
     batch_size: int,
-    shuffle=True
-):
+    shuffle: bool = True,
+) -> torch.utils.data.DataLoader:
     dataset = OnlyGenomicDataset(df, feature_cols, label_col)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
     return dataloader
