@@ -107,6 +107,10 @@ if __name__ == "__main__":
 
     train_losses = []
 
+    print(f'Training on device: {device}')
+    if device == "cuda":
+        print(f'Using {torch.cuda.device_count()}')
+
     for fold_idx, fold in enumerate(folds):
 
         print(f'Training fold {fold_idx+1}...\n')
