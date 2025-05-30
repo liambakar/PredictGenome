@@ -1,13 +1,12 @@
 from utils.get_dataset import get_folded_rna_dataset, convert_df_to_dataloader, OnlyGenomicDataset
 from utils.training_utils import get_lr_scheduler, get_optim, print_network, save_checkpoint
-from model.genome_model import GenomePrediction
 from model.temp_genome_model import Simple
 
 import os
 import torch
 import tqdm
 import numpy as np
-from lifelines.utils import concordance_index
+# from lifelines.utils import concordance_index
 
 if torch.cuda.is_available():
     device = torch.device("cuda")
@@ -73,7 +72,7 @@ def train_loop(
 
     model.eval()
     with torch.no_grad():
-        test_features, test_labels = test_data.get_features(), test_data.get_labels().numpy()
+        test_features, test_labels = test_data.get_features(), test_data.get_labels()
         test_features = safe_list_to(test_features, device)
         outputs = model(test_features)
         predicted = np.argmax(outputs.cpu(), axis=1)
