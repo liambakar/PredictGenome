@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 
 
-def load_hallmark_signatures(path):
+def load_hallmark_signatures(path: str) -> dict:
     """
     Returns dict[pathway] = list of gene names
     """
@@ -10,7 +10,7 @@ def load_hallmark_signatures(path):
     return {col: df[col].dropna().unique().tolist() for col in df.columns}
 
 
-def extract_pathway_summary(expr_df, signatures):
+def extract_pathway_summary(expr_df: pd.DataFrame, signatures: dict) -> tuple[list[str], dict]:
     """
     For each sample and each pathway, perform:
       1) Extract subvector according to pathway gene list
@@ -49,9 +49,9 @@ def extract_pathway_summary(expr_df, signatures):
 
 
 if __name__ == '__main__':
-    rna_path = '../datasets/rna_clean.csv'
+    rna_path = './datasets/rna_clean.csv'
 
-    Hallmark_pathway_path = '../datasets/hallmarks_signatures.csv'
+    Hallmark_pathway_path = './datasets/hallmarks_signatures.csv'
     pd_hallmark = pd.read_csv(Hallmark_pathway_path)
 
     expr = pd.read_csv(rna_path)
@@ -83,7 +83,7 @@ if __name__ == '__main__':
 
     print("\n=== Pathway Vector Lengths (for first sample) ===")
     for i, (pathway, vectors) in enumerate(S_path.items()):
-        if i < 5:  #
+        if i < 5:
             vector_length = len(vectors[0]) if len(vectors) > 0 else 0
             print(f"{pathway}: {vector_length} non-zero genes")
 

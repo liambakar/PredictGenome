@@ -2,6 +2,10 @@ import os
 import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader
+from typing import Iterable
+import numpy as np
+
+from utils.extract_pathway import extract_pathway_summary, load_hallmark_signatures
 
 
 def get_rna_df():
@@ -21,8 +25,22 @@ def get_folded_rna_dataset():
         base_dir) if os.path.isdir(os.path.join(base_dir, f))]
 
     folds = []
+    rna_path = os.path.join(os.path.dirname(
+        os.path.dirname(os.path.dirname(__file__))), 'datasets/rna_clean.csv')
 
-    rna_df = get_rna_df()
+    Hallmark_pathway_path = os.path.join(os.path.dirname(
+        os.path.dirname(os.path.dirname(__file__))), 'datasets/hallmarks_signatures.csv')
+
+    expr = pd.read_csv(rna_path)
+    signatures = load_hallmark_signatures(Hallmark_pathway_path)
+    sample_ids, sample_paths = extract_pathway_summary(expr, signatures)
+
+    rna_df = pd.DataFrame(sample_paths)
+    rna_df.insert(loc=0, column='sample', value=sample_ids)
+    rna_df['sample'] = rna_df['sample'].apply(lambda x: x[:-3])
+
+    rna_df.to_csv(os.path.join(os.path.dirname(
+        os.path.dirname(os.path.dirname(__file__))), 'datasets/rna_pathways.csv'))
 
     for folder in cv_folders:
         folder_path = os.path.join(base_dir, folder)
@@ -56,7 +74,7 @@ def get_folded_rna_dataset():
 
 
 class OnlyGenomicDataset(Dataset):
-    def __init__(self, df, feature_cols, label_col):
+    def __init__(self, df: pd.DataFrame, feature_cols: list[str], label_col: str):
         self.df = df
         self.feature_cols = feature_cols
         self.label_col = label_col
@@ -73,15 +91,15 @@ class OnlyGenomicDataset(Dataset):
         )
         return features, label
 
-    def get_labels(self) -> torch.Tensor:
-        return torch.tensor(self.df[self.label_col].values, dtype=torch.float32)
+    def get_labels(self) -> np.ndarray:
+        return self.df[self.label_col].values  # type: ignore
 
-    def get_features(self) -> torch.Tensor:
-        return torch.tensor(self.df[self.feature_cols].values.tolist(), dtype=torch.float32)
+    def get_features(self) -> np.ndarray:
+        return self.df[self.feature_cols].values
 
 
 def convert_df_to_dataloader(
-    df: dict,
+    df: pd.DataFrame,
     feature_cols:
     list[str],
     label_col: str,
