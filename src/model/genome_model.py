@@ -1,112 +1,106 @@
 import torch.nn as nn
-from model.modules import PositionalEncoding, CoAttentionModule
-import numpy as np
+import torch.nn.functional as F
+import torch
+
+from model.modules import HallmarkFeatureProcessor
 
 
-class GenomePrediction(nn.Module):
+class HallmarkSurvivalModel(nn.Module):
     """
-    CoAttention Transformer model for RNA gene expression classification.
+    PyTorch model for multiclass survival classification using hallmark data.
     """
 
-    def __init__(self, num_classes, num_genes, embed_dim, num_coattention_queries,
-                 num_attn_heads, num_transformer_layers, dim_feedforward, dropout=0.1):
-        super(GenomePrediction, self).__init__()
-
-        self.embed_dim = embed_dim
-        self.num_genes = num_genes  # Number of gene features, also acts as sequence length
-
-        # 1. Input Projection Layer for Gene Expression Values
-        # Each gene's expression value (a scalar) is projected to embed_dim.
-        # Input to this layer will be (batch_size, num_genes, 1)
-        # Output will be (batch_size, num_genes, embed_dim)
-        self.input_projection = nn.Linear(1, embed_dim)
-
-        # 2. Positional Encoding
-        # max_len for positional encoding is num_genes.
-        self.pos_encoder = PositionalEncoding(
-            embed_dim, dropout, max_len=num_genes)
-
-        # 3. CoAttention Module
-        self.coattention_module = CoAttentionModule(
-            embed_dim, num_attn_heads, num_coattention_queries, dropout)
-
-        # 4. Standard Transformer Encoder Layers
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=embed_dim,
-            nhead=num_attn_heads,
-            dim_feedforward=dim_feedforward,
-            dropout=dropout,
-            batch_first=True,
-            activation='relu'
-        )
-        self.transformer_encoder = nn.TransformerEncoder(
-            encoder_layer, num_layers=num_transformer_layers)
-
-        # 5. Classifier Head
-        self.classifier = nn.Linear(embed_dim, num_classes)
-        self.final_dropout = nn.Dropout(dropout)
-
-        self._init_weights()
-
-    def _init_weights(self):
-        # Initialize weights for linear layers and coattention queries.
-        for p in self.parameters():
-            if p.dim() > 1:  # For weight matrices
-                nn.init.xavier_uniform_(p)
-        # Specific initialization for input_projection if desired, e.g.:
-        # nn.init.kaiming_normal_(self.input_projection.weight, mode='fan_in', nonlinearity='relu')
-        # if self.input_projection.bias is not None:
-        #     nn.init.constant_(self.input_projection.bias, 0)
-
-    def forward(self, src_gene_expressions, src_key_padding_mask=None):
+    def __init__(self,
+                 M,
+                 N_CLASSES,
+                 hallmark_embedding_dim=128,  # Dimension of embedding from feature processing
+                 cnn_filters=32,
+                 cnn_kernel_size=3,
+                 fc1_units=256,
+                 fc2_units=128,
+                 dropout_rate=0.4):
         """
+        Main network for multiclass survival classification with variable length hallmarks.
+
         Args:
-            src_gene_expressions: Tensor, shape (batch_size, num_genes) 
-                                  - float values of gene expressions.
-            src_key_padding_mask: Tensor, shape (batch_size, num_genes) 
-                                  - boolean mask, True for genes to be masked/padded.
-        Returns:
-            logits: Tensor, shape (batch_size, num_classes) 
-                    - raw output scores for each class.
+            M (int): Number of hallmark gene sets.
+            N_CLASSES (int): Number of survival classes (output bins).
+            hallmark_embedding_dim (int): Fixed output dimension from the SharedHallmarkProcessor.
+            cnn_filters (int): Num filters for the shared CNN processor.
+            cnn_kernel_size (int): Kernel size for the shared CNN processor.
+            fc1_units (int): Units in the first dense layer of the backbone.
+            fc2_units (int): Units in the second dense layer of the backbone.
+            dropout_rate (float): Dropout rate.
         """
+        super(HallmarkSurvivalModel, self).__init__()
+        self.M = M
+        self.N_CLASSES = N_CLASSES
 
-        # 1. Input Projection
-        # Reshape src_gene_expressions from (batch_size, num_genes) to (batch_size, num_genes, 1)
-        x = src_gene_expressions.unsqueeze(2)
+        # Instantiate the shared processor
+        self.hallmark_processor = HallmarkFeatureProcessor(
+            output_embedding_dim=hallmark_embedding_dim,
+            cnn_filters=cnn_filters,
+            cnn_kernel_size=cnn_kernel_size
+        )
 
-        # Project to (batch_size, num_genes, embed_dim)
-        x = self.input_projection(x)
-        # Optional: Scale projected embeddings, similar to how token embeddings are often scaled.
-        x = x * np.sqrt(self.embed_dim)
+        # Calculate the total number of features after processing all M hallmarks
+        self.concatenated_features_dim = M * hallmark_embedding_dim
 
-        # 2. Positional Encoding
-        x = self.pos_encoder(x)  # Output: (batch_size, num_genes, embed_dim)
+        # Fully connected backbone
+        self.fc1 = nn.Linear(self.concatenated_features_dim, fc1_units)
+        self.bn_fc1 = nn.BatchNorm1d(fc1_units)
+        self.dropout1 = nn.Dropout(dropout_rate)
 
-        # 3. CoAttention Module
-        # Output: (batch_size, num_genes, embed_dim)
-        x = self.coattention_module(
-            x, src_key_padding_mask=src_key_padding_mask)
+        self.fc2 = nn.Linear(fc1_units, fc2_units)
+        self.bn_fc2 = nn.BatchNorm1d(fc2_units)
+        self.dropout2 = nn.Dropout(dropout_rate)
 
-        # 4. Transformer Encoder
-        # src_key_padding_mask masks attention over specified genes.
-        # Output: (batch_size, num_genes, embed_dim)
-        x = self.transformer_encoder(
-            x, src_key_padding_mask=src_key_padding_mask)
+        # Output layer
+        self.output_fc = nn.Linear(fc2_units, N_CLASSES)
 
-        # 5. Classification - Pooling and Linear Layer
-        # Mean pooling over the gene dimension, handling padding if mask is provided.
-        if src_key_padding_mask is not None:
-            # (batch_size, num_genes)
-            active_elements_mask = ~src_key_padding_mask
-            # Zero out masked genes
-            x_masked = x * active_elements_mask.unsqueeze(-1)
-            num_active_elements = active_elements_mask.sum(
-                dim=1, keepdim=True).clamp(min=1.0)
-            pooled_output = x_masked.sum(dim=1) / num_active_elements
-        else:
-            pooled_output = x.mean(dim=1)  # (batch_size, embed_dim)
+    def forward(self, list_of_hallmark_data):
+        """
+        Forward pass.
 
-        pooled_output = self.final_dropout(pooled_output)
-        logits = self.classifier(pooled_output)  # (batch_size, num_classes)
+        Args:
+            list_of_hallmark_data (list): A list of M tensors. 
+                                          Each tensor list_of_hallmark_data[i] should have
+                                          shape (batch_size, L_i), where L_i is the length
+                                          of the i-th hallmark's feature vector.
+
+        Returns:
+            torch.Tensor: Logits of shape (batch_size, N_CLASSES).
+        """
+        if len(list_of_hallmark_data) != self.M:
+            raise ValueError(
+                f"Expected a list of {self.M} tensors, got {len(list_of_hallmark_data)}")
+
+        processed_embeddings = []
+        for i in range(self.M):
+            x_i = list_of_hallmark_data[i]
+
+            # Add channel dimension for Conv1D: (batch_size, 1, L_i)
+            x_i_cnn_input = x_i.unsqueeze(1)
+
+            # (batch_size, hallmark_embedding_dim)
+            embedding_i = self.hallmark_processor(x_i_cnn_input)
+            processed_embeddings.append(embedding_i)
+
+        # Concatenate embeddings from all M hallmarks
+        # List of M tensors of shape (batch_size, hallmark_embedding_dim)
+        # -> single tensor of shape (batch_size, M * hallmark_embedding_dim)
+        concatenated_features = torch.cat(processed_embeddings, dim=1)
+
+        out = self.fc1(concatenated_features)
+        out = self.bn_fc1(out)
+        out = F.relu(out)
+        out = self.dropout1(out)
+
+        out = self.fc2(out)
+        out = self.bn_fc2(out)
+        out = F.relu(out)
+        out = self.dropout2(out)
+
+        logits = self.output_fc(out)
 
         return logits
