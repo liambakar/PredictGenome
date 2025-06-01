@@ -21,7 +21,7 @@ def extract_pathway_summary(expr_df: pd.DataFrame, signatures: dict) -> tuple[li
                        pathway_summary[c][i] is the R aggregated vector for sample i on pathway c
     """
     # Assume first column of expr_df is sample ID, remaining columns are gene expression
-    sample_ids = expr_df.iloc[:, 1].tolist()
+    sample_ids = expr_df.iloc[:, 1].str[:-3].tolist()
     gene_columns = expr_df.columns[2:]
     data = expr_df[gene_columns].values  # shape = (num_samples, N_g)
 
@@ -49,15 +49,17 @@ def extract_pathway_summary(expr_df: pd.DataFrame, signatures: dict) -> tuple[li
 
 
 if __name__ == '__main__':
-    rna_path = './datasets/rna_clean.csv'
+    rna_path = '../datasets/rna_clean.csv'
 
-    Hallmark_pathway_path = './datasets/hallmarks_signatures.csv'
+    Hallmark_pathway_path = '../datasets/hallmarks_signatures.csv'
     pd_hallmark = pd.read_csv(Hallmark_pathway_path)
 
     expr = pd.read_csv(rna_path)
     signatures = load_hallmark_signatures(Hallmark_pathway_path)
     sample_ids, S_path = extract_pathway_summary(expr, signatures)
-
+    first_pathway, first_vectors = list(S_path.items())[0]
+    print(first_pathway)
+    # print(first_vectors)
     print("=== S_path Shape Analysis ===")
     print(f"Number of pathways: {len(S_path)}")
     print(f"Number of samples: {len(sample_ids)}")
@@ -108,3 +110,42 @@ if __name__ == '__main__':
         print("✅ Data structure is consistent!")
     else:
         print("❌ Data structure inconsistency detected!")
+        
+    # Load labels
+    label_df = pd.read_csv('../datasets/case_ids_to_disc_labels.csv')
+    label_df = label_df[['case_id', 'disc_label']].dropna()
+
+    # Create a mapping from case_id to disc_label
+    case_to_label = dict(zip(label_df['case_id'], label_df['disc_label']))
+
+    # Construct a list of rows
+    records = []
+    for i, sample_id in enumerate(sample_ids):
+        record = {'sample_id': sample_id}
+        for pathway in S_path:
+            record[pathway] = S_path[pathway][i]  # keep full np.ndarray
+        record['disc_label'] = case_to_label.get(sample_id, np.nan)
+        records.append(record)
+
+    # Create DataFrame
+    full_vector_df = pd.DataFrame(records)
+
+    # Drop samples with missing label
+    full_vector_df = full_vector_df.dropna(subset=['disc_label'])
+
+    # Preview
+    print(full_vector_df.head())
+    print(len(full_vector_df))
+
+    import os
+
+
+    # Step 2: Convert ndarray values to lists for JSON serialization
+    full_vector_df_serialized = full_vector_df.copy()
+    for col in full_vector_df_serialized.columns:
+        if col not in ['sample_id', 'disc_label']:
+            full_vector_df_serialized[col] = full_vector_df_serialized[col].apply(lambda x: x.tolist() if isinstance(x, np.ndarray) else x)
+
+    # Step 3: Save as JSON (line-delimited format)
+    full_vector_df_serialized.to_json('../datasets/dataset.json', orient='records', lines=True)
+

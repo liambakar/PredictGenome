@@ -2,7 +2,7 @@ from pathlib import Path
 import pandas as pd
 
 # adjust to wherever your fold-dirs live
-root = Path('../new_csv')
+root = Path('../clinical_csv_consistent')
 all_dfs = []
 
 # 1) read everything in
