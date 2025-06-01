@@ -1,6 +1,6 @@
 from model.genome_model import HallmarkSurvivalModel
 from utils.get_dataset import (
-    get_folded_rna_dataset,
+    get_final_rna_folds,
     convert_df_to_dataloader,
     OnlyGenomicDataset,
     convert_to_32_bit
@@ -17,6 +17,7 @@ import os
 import torch
 import tqdm
 import numpy as np
+import matplotlib.pyplot as plt
 # from lifelines.utils import concordance_index
 
 if torch.cuda.is_available():
@@ -27,30 +28,19 @@ else:
     device = torch.device("cpu")
 
 
-def safe_list_to(data, device) -> torch.Tensor | Iterable[torch.Tensor]:
-    if isinstance(data, torch.Tensor):
-        return data.to(device)
-    elif isinstance(data, tuple):
-        return (d.to(device) for d in data)
-    elif isinstance(data, list):
-        return [d.to(device) for d in data]
-    elif isinstance(data, dict):
-        return {k: v.to(device) for (k, v) in data.keys()}
-    else:
-        raise RuntimeError("data should be a Tensor, tuple, list or dict, but"
-                           " not {}".format(type(data)))
-
-
 def train_loop(
     model: torch.nn.Module,
     epochs: int,
+    fold_idx: int,
     dataloader: torch.utils.data.DataLoader,
     test_data: OnlyGenomicDataset,
     loss_func: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
     lr_scheduler: torch.optim.lr_scheduler.LRScheduler,
 ) -> tuple[list[float], float, float]:
+
     train_loss = []
+
     for epoch in range(epochs):
         model.train()
 
@@ -58,8 +48,9 @@ def train_loop(
 
         for features, label in tqdm.tqdm(dataloader):
 
-            features = safe_list_to(features, device)
-            label = safe_list_to(label, device)
+            label = label.to(device)
+
+            features = [feature.to(device) for feature in features]
 
             out = model(features)
 
@@ -122,7 +113,7 @@ def train_loop(
 
 
 if __name__ == "__main__":
-    folds = get_folded_rna_dataset()
+    folds = get_final_rna_folds()
 
     loss_fn = torch.nn.CrossEntropyLoss()
     NUM_CLASSES = 4
@@ -146,7 +137,8 @@ if __name__ == "__main__":
         print(f'Training fold {fold_idx}...\n')
 
         batchsize = 32
-        feature_cols = fold['train'].columns[2:]
+
+        feature_cols = list(fold['train'].columns[1:-1])
         label_col = 'disc_label'
 
         if device.type == "mps":
@@ -169,7 +161,7 @@ if __name__ == "__main__":
         lr_scheduler = get_lr_scheduler(epochs, optimizer, len(dataloader))
 
         train_loss, test_acc, c_index = train_loop(
-            model, epochs, dataloader, test_data, loss_fn, optimizer, lr_scheduler)
+            model, epochs, fold_idx, dataloader, test_data, loss_fn, optimizer, lr_scheduler)
 
         print(
             f'\nFold {fold_idx} had a test accuracy of {test_acc:.2%} and a c-index of {c_index:.4f}')
@@ -178,9 +170,20 @@ if __name__ == "__main__":
         test_accuracies.append(test_acc)
         train_losses.append(train_loss)
 
+    plt.figure(figsize=(10, 8))
+    for i, loss in enumerate(train_losses):
+        plt.plot(loss, label=f'Fold {i}')
+    plt.legend()
+    plt.title('Training Losses for each fold')
+    plt.ylabel('Training Loss')
+    plt.xlabel('Iteration')
+    plt.show()
+
     test_accuracies = np.array(test_accuracies)
-    mean_acc = np.mean(test_accuracies)
-    std_acc = np.std(test_accuracies)
+    mean_acc = np.mean(
+        test_accuracies) if test_accuracies.size > 0 else 0
+    std_acc = np.std(
+        test_accuracies) if test_accuracies.size > 0 else 0
     mean_acc_percent = mean_acc * 100
     std_acc_percent = std_acc * 100
     format_string = f"{{:.{3}f}}%"

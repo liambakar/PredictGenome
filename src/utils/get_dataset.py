@@ -3,6 +3,8 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
+from sklearn.model_selection import StratifiedKFold
+from typing import Union
 
 from utils.extract_pathway import extract_pathway_summary, load_hallmark_signatures
 
@@ -22,6 +24,8 @@ def convert_to_32_bit(df: pd.DataFrame) -> pd.DataFrame:
         example = df[col].iloc[0]
         if type(example) == np.ndarray:
             df[col] = df[col].apply(lambda x: x.astype(np.float32))
+        elif type(example) == list:
+            df[col] = df[col].apply(lambda x: [np.float32(x_i) for x_i in x])
         if pd.api.types.is_numeric_dtype(df[col]):
             df[col] = pd.to_numeric(df[col], downcast='float')
     return df
@@ -82,18 +86,53 @@ def get_folded_rna_dataset():
     return folds
 
 
+def get_final_rna_folds(json_dataset_path: str = 'datasets/final_dataset.json', k_splits: int = 5, shuffle: bool = True) -> list[dict[str, pd.DataFrame]]:
+    json_dataset_path = os.path.join(os.path.dirname(
+        os.path.dirname(os.path.dirname(__file__))), json_dataset_path)
+    df = pd.read_json(json_dataset_path, lines=True)
+    kf = StratifiedKFold(n_splits=k_splits, shuffle=shuffle)
+    y = df['disc_label']
+    x = df.drop('disc_label', axis=1)
+    x = x.apply(lambda x: np.array(x))
+    folds = []
+    for i, (train_i, test_i) in enumerate(kf.split(x, y)):
+
+        print(f"\n==== Fold {i} ====")
+
+        train_df = df.iloc[train_i]
+        test_df = df.iloc[test_i]
+
+        print(f'Train shape: {train_df.shape}')
+        print(f'Test shape: {test_df.shape}')
+
+        folds.append({'train': train_df, 'test': test_df})
+
+    print(f'\nSuccessfully retrieved {len(folds)} folds.\n')
+    return folds
+
+
 class OnlyGenomicDataset(Dataset):
+
     def __init__(self, df: pd.DataFrame, feature_cols: list[str], label_col: str):
-        self.df = df
+        self.df = df.copy()
+        self.df.reset_index(drop=True)
+        for col in self.df.columns:
+            if isinstance(self.df[col].values[0], (list, tuple)):
+                self.df[col] = self.df[col].apply(np.array)
         self.feature_cols = feature_cols
         self.label_col = label_col
 
     def __len__(self) -> int:
         return len(self.df)
 
-    def __getitem__(self, index) -> tuple[list, float]:
-        features = list(self.df.loc[index, self.feature_cols].values)
-        label = pd.to_numeric(self.df.loc[index, self.label_col])
+    def __getitem__(self, index) -> tuple[list, torch.Tensor]:
+        row = self.df.iloc[index]
+        features = list(row.loc[self.feature_cols].values)
+        for i, f in enumerate(features):
+            features[i] = torch.tensor(f, dtype=torch.float32)
+
+        label = torch.tensor(pd.to_numeric(
+            row[self.label_col], downcast='float'), dtype=torch.float32)
         return features, label
 
     def get_labels(self) -> np.ndarray:
