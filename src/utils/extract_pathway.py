@@ -147,5 +147,5 @@ if __name__ == '__main__':
             full_vector_df_serialized[col] = full_vector_df_serialized[col].apply(lambda x: x.tolist() if isinstance(x, np.ndarray) else x)
 
     # Step 3: Save as JSON (line-delimited format)
-    full_vector_df_serialized.to_json('../datasets/dataset.json', orient='records', lines=True)
+    full_vector_df_serialized.to_json('../datasets/final_dataset.json', orient='records', lines=True)
 
