@@ -1,6 +1,17 @@
-from utils.get_dataset import get_folded_rna_dataset, convert_df_to_dataloader, OnlyGenomicDataset
-from utils.training_utils import get_lr_scheduler, get_optim, print_network, save_checkpoint
-from model.temp_genome_model import Simple
+from model.genome_model import HallmarkSurvivalModel
+from utils.get_dataset import (
+    get_folded_rna_dataset,
+    convert_df_to_dataloader,
+    OnlyGenomicDataset,
+    convert_to_32_bit
+)
+from utils.training_utils import (
+    get_lr_scheduler,
+    get_optim,
+    print_network,
+    save_checkpoint
+)
+from typing import Iterable
 
 import os
 import torch
@@ -16,15 +27,15 @@ else:
     device = torch.device("cpu")
 
 
-def safe_list_to(data, device) -> torch.Tensor:
+def safe_list_to(data, device) -> torch.Tensor | Iterable[torch.Tensor]:
     if isinstance(data, torch.Tensor):
         return data.to(device)
     elif isinstance(data, tuple):
-        return (d.to(device) for d in data)  # type: ignore
+        return (d.to(device) for d in data)
     elif isinstance(data, list):
-        return [d.to(device) for d in data]  # type: ignore
+        return [d.to(device) for d in data]
     elif isinstance(data, dict):
-        return {k: v.to(device) for (k, v) in data.keys()}  # type: ignore
+        return {k: v.to(device) for (k, v) in data.keys()}
     else:
         raise RuntimeError("data should be a Tensor, tuple, list or dict, but"
                            " not {}".format(type(data)))
@@ -73,12 +84,32 @@ def train_loop(
     model.eval()
     with torch.no_grad():
         test_features, test_labels = test_data.get_features(), test_data.get_labels()
-        test_features = safe_list_to(test_features, device)
-        outputs = model(test_features)
-        predicted = np.argmax(outputs.cpu(), axis=1)
-        correct = (predicted == test_labels).sum()
+        test_preds = []  # To store output logits for each sample
+
+        for sample_idx in range(len(test_features)):
+            test_sample = test_features[sample_idx]
+            # It needs to be a list of M tensors, where each tensor is shape (1, L_j)
+            reshaped_input = []
+            for hallmark in test_sample:
+                # Shape: (L_j,)
+                hallmark_tensor = torch.from_numpy(
+                    hallmark).to(device)
+                # Shape: (1, L_j)
+                hallmark_tensor_batched = hallmark_tensor.unsqueeze(0)
+                reshaped_input.append(hallmark_tensor_batched)
+
+            output = model(reshaped_input)
+            test_preds.append(output.cpu())
+
+        all_outputs_tensor = torch.cat(test_preds, dim=0)
+        predicted_indices = torch.argmax(all_outputs_tensor, dim=1).numpy()
+
+        assert len(predicted_indices) == len(test_labels)
+
+        correct = (predicted_indices == test_labels.squeeze(1)).sum()
+
         total = test_labels.shape[0]
-        test_acc = correct / total
+        test_acc = float(correct) / total if total > 0 else 0.0
 
         # calculate c_index
         c_index = float('inf')
@@ -93,7 +124,7 @@ def train_loop(
 if __name__ == "__main__":
     folds = get_folded_rna_dataset()
 
-    loss_fn = torch.nn.NLLLoss()
+    loss_fn = torch.nn.CrossEntropyLoss()
     NUM_CLASSES = 4
     EMBED_DIM = 128
     NUM_COATTENTION_QUERIES = 16
@@ -112,11 +143,15 @@ if __name__ == "__main__":
 
     for fold_idx, fold in enumerate(folds):
 
-        print(f'Training fold {fold_idx+1}...\n')
+        print(f'Training fold {fold_idx}...\n')
 
         batchsize = 32
         feature_cols = fold['train'].columns[2:]
         label_col = 'disc_label'
+
+        if device.type == "mps":
+            fold['train'] = convert_to_32_bit(fold['train'])
+            fold['test'] = convert_to_32_bit(fold['test'])
 
         dataloader = convert_df_to_dataloader(
             fold['train'], feature_cols, label_col, batch_size=batchsize
@@ -124,22 +159,12 @@ if __name__ == "__main__":
 
         test_data = OnlyGenomicDataset(fold['test'], feature_cols, label_col)
 
-        # model = GenomePrediction(
-        #     num_classes=NUM_CLASSES,
-        #     num_genes=len(feature_cols),
-        #     embed_dim=EMBED_DIM,
-        #     num_coattention_queries=NUM_COATTENTION_QUERIES,
-        #     num_attn_heads=NUM_ATTN_HEADS,
-        #     num_transformer_layers=NUM_TRANSFORMER_LAYERS,
-        #     dim_feedforward=DIM_FEEDFORWARD,
-        #     dropout=DROPOUT_RATE
-        # ).to(device)
-
-        model = Simple(len(feature_cols), NUM_CLASSES).to(device)
+        model = HallmarkSurvivalModel(
+            len(feature_cols), NUM_CLASSES).to(device)
 
         # print_network(model)
 
-        epochs = 45
+        epochs = 30
         optimizer = get_optim('adamW', model)
         lr_scheduler = get_lr_scheduler(epochs, optimizer, len(dataloader))
 
@@ -147,10 +172,21 @@ if __name__ == "__main__":
             model, epochs, dataloader, test_data, loss_fn, optimizer, lr_scheduler)
 
         print(
-            f'\nFold {fold_idx + 1} had a test accuracy of {test_acc:.2%} and a c-index of {c_index:.4f}')
+            f'\nFold {fold_idx} had a test accuracy of {test_acc:.2%} and a c-index of {c_index:.4f}')
         print('\n========================\n\n')
 
         test_accuracies.append(test_acc)
         train_losses.append(train_loss)
 
-    print(test_accuracies)
+    test_accuracies = np.array(test_accuracies)
+    mean_acc = np.mean(test_accuracies)
+    std_acc = np.std(test_accuracies)
+    mean_acc_percent = mean_acc * 100
+    std_acc_percent = std_acc * 100
+    format_string = f"{{:.{3}f}}%"
+    mean_str = format_string.format(mean_acc_percent)
+    std_str = format_string.format(std_acc_percent)
+
+    print(f"Fold Accuracies: {test_accuracies}")
+    print(f"Mean Test Accuracy: {mean_str} ± {std_str}")
+    print(f"(K={len(test_accuracies)} folds)")

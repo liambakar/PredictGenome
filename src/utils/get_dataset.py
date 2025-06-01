@@ -2,7 +2,6 @@ import os
 import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader
-from typing import Iterable
 import numpy as np
 
 from utils.extract_pathway import extract_pathway_summary, load_hallmark_signatures
@@ -15,6 +14,16 @@ def get_rna_df():
     # removes last 3 characters from each string in 'sample'
     df['sample'] = df['sample'].apply(lambda x: x[:-3])
     df = df.drop('Unnamed: 0', axis=1)
+    return df
+
+
+def convert_to_32_bit(df: pd.DataFrame) -> pd.DataFrame:
+    for col in df.columns:
+        example = df[col].iloc[0]
+        if type(example) == np.ndarray:
+            df[col] = df[col].apply(lambda x: x.astype(np.float32))
+        if pd.api.types.is_numeric_dtype(df[col]):
+            df[col] = pd.to_numeric(df[col], downcast='float')
     return df
 
 
@@ -82,17 +91,13 @@ class OnlyGenomicDataset(Dataset):
     def __len__(self) -> int:
         return len(self.df)
 
-    def __getitem__(self, index) -> tuple[torch.Tensor, torch.Tensor]:
-        features = torch.tensor(
-            self.df.loc[index, self.feature_cols].values.tolist(), dtype=torch.float32
-        )
-        label = torch.tensor(
-            self.df.loc[index, self.label_col], dtype=torch.float32
-        )
+    def __getitem__(self, index) -> tuple[list, float]:
+        features = list(self.df.loc[index, self.feature_cols].values)
+        label = pd.to_numeric(self.df.loc[index, self.label_col])
         return features, label
 
     def get_labels(self) -> np.ndarray:
-        return self.df[self.label_col].values  # type: ignore
+        return self.df[[self.label_col]].values
 
     def get_features(self) -> np.ndarray:
         return self.df[self.feature_cols].values
@@ -100,8 +105,7 @@ class OnlyGenomicDataset(Dataset):
 
 def convert_df_to_dataloader(
     df: pd.DataFrame,
-    feature_cols:
-    list[str],
+    feature_cols: list[str],
     label_col: str,
     batch_size: int,
     shuffle: bool = True,
