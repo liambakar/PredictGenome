@@ -67,6 +67,43 @@ def main():
         load_data(cur, fold)
 
 
+def main_combined(n_label_bins=4):
+    """
+    For each fold, combine train and test data to compute consistent discretization bins,
+    then label each set with those bins and save outputs under new_csv.
+    """
+    folder_numbers = [0, 1, 2, 3, 4]
+    for fold in folder_numbers:
+        # Load train and test for current fold
+        train_path = f'clinical_csv/TCGA_BRCA_overall_survival_k={fold}/train.csv'
+        test_path = f'clinical_csv/TCGA_BRCA_overall_survival_k={fold}/test.csv'
+        df_train = pd.read_csv(train_path)
+        df_test = pd.read_csv(test_path)
+        # Combine to compute shared bins
+        df_all = pd.concat([df_train, df_test], ignore_index=True)
+        disc_all, q_bins = compute_discretization(df_all,
+                                                survival_time_col='dss_survival_days',
+                                                censorship_col='dss_censorship',
+                                                n_label_bins=n_label_bins)
+        # Label train and test with shared bins
+        df_train_labeled, _ = add_discrete_label(df_train,
+                                                survival_time_col='dss_survival_days',
+                                                censorship_col='dss_censorship',
+                                                n_label_bins=n_label_bins,
+                                                new_label_col='disc_label',
+                                                label_bins=q_bins)
+        df_test_labeled, _ = add_discrete_label(df_test,
+                                                survival_time_col='dss_survival_days',
+                                                censorship_col='dss_censorship',
+                                                n_label_bins=n_label_bins,
+                                                new_label_col='disc_label',
+                                                label_bins=q_bins)
+        # Save labeled datasets
+        output_dir = f'/home/zhongyuj/why/HW/PredictGenome/new_csv/TCGA_BRCA_overall_survival_k={fold}'
+        os.makedirs(output_dir, exist_ok=True)
+        df_train_labeled.to_csv(os.path.join(output_dir, 'train.csv'), index=False)
+        df_test_labeled.to_csv(os.path.join(output_dir, 'test.csv'), index=False)
+
 def check_label_consistency(base_dir, n_folds=5, split='train', label_col='disc_label'):
     """
     For each case_id appearing in all folds (0..n_folds-1), check if its label_col is the same across folds.
@@ -94,9 +131,10 @@ def check_label_consistency(base_dir, n_folds=5, split='train', label_col='disc_
 
 if __name__ == "__main__":
     # main()
-    base = '/home/zhongyuj/why/HW/PredictGenome/new_csv'
-    incons = check_label_consistency(base, n_folds=5, split='train')
-    if incons:
-        print("Found inconsistencies:", incons)
-    else:
-        print("All labels consistent across folds.")
+    main_combined(n_label_bins=4)
+    # base = '/home/zhongyuj/why/HW/PredictGenome/new_csv'
+    # incons = check_label_consistency(base, n_folds=5, split='train')
+    # if incons:
+    #     print("Found inconsistencies:", incons)
+    # else:
+    #     print("All labels consistent across folds.")
