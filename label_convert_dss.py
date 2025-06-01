@@ -58,15 +58,6 @@ def add_discrete_label(df, survival_time_col='dss_survival_days', censorship_col
     df[new_label_col] = disc_labels
     return df, bins
 
-def main():
-    folder_number = [0, 1, 2, 3, 4]
-    for fold in folder_number:
-        cur = f'clinical_csv/TCGA_BRCA_overall_survival_k={fold}/train.csv'
-        load_data(cur, fold)
-        cur = f'clinical_csv/TCGA_BRCA_overall_survival_k={fold}/test.csv'
-        load_data(cur, fold)
-
-
 def main_combined(n_label_bins=4):
     """
     For each fold, combine train and test data to compute consistent discretization bins,
@@ -104,37 +95,31 @@ def main_combined(n_label_bins=4):
         df_train_labeled.to_csv(os.path.join(output_dir, 'train.csv'), index=False)
         df_test_labeled.to_csv(os.path.join(output_dir, 'test.csv'), index=False)
 
-def check_label_consistency(base_dir, n_folds=5, split='train', label_col='disc_label'):
+
+def check_nan_labels(base_dir, n_folds=5, splits=('train','test'), label_col='disc_label'):
     """
-    For each case_id appearing in all folds (0..n_folds-1), check if its label_col is the same across folds.
-    base_dir contains subfolders like 'TCGA_BRCA_overall_survival_k={fold}'.
-    Returns a dict of inconsistent case_ids mapping to their fold labels.
+    Check for NaN values in the discrete label column across saved CSV files.
+    Returns a dict mapping fold -> split -> count of NaNs (only if >0).
     """
-    import pandas as pd
-    inconsistencies = {}
-    # collect labels per fold
-    label_maps = {}
+    results = {}
     for fold in range(n_folds):
         folder = os.path.join(base_dir, f'TCGA_BRCA_overall_survival_k={fold}')
-        csv_path = os.path.join(folder, f'{split}.csv')
-        if not os.path.isfile(csv_path):
-            continue
-        df = pd.read_csv(csv_path, usecols=['case_id', label_col])
-        label_maps[fold] = dict(zip(df['case_id'], df[label_col]))
-    # find common case_ids
-    common_ids = set.intersection(*[set(m.keys()) for m in label_maps.values()])
-    for cid in common_ids:
-        labels = {fold: label_maps[fold][cid] for fold in label_maps}
-        if len(set(labels.values())) > 1:
-            inconsistencies[cid] = labels
-    return inconsistencies
+        for split in splits:
+            csv_path = os.path.join(folder, f'{split}.csv')
+            if not os.path.isfile(csv_path):
+                continue
+            df = pd.read_csv(csv_path, usecols=[label_col])
+            nan_count = df[label_col].isna().sum()
+            if nan_count > 0:
+                results.setdefault(fold, {})[split] = int(nan_count)
+    return results
 
 if __name__ == "__main__":
-    # main()
-    main_combined(n_label_bins=4)
-    # base = '/home/zhongyuj/why/HW/PredictGenome/new_csv'
-    # incons = check_label_consistency(base, n_folds=5, split='train')
-    # if incons:
-    #     print("Found inconsistencies:", incons)
-    # else:
-    #     print("All labels consistent across folds.")
+    # main_combined(n_label_bins=4)
+    base = '/home/zhongyuj/why/HW/PredictGenome/new_csv'
+    
+    nan_results = check_nan_labels(base, n_folds=5, splits=('train', 'test'))
+    if nan_results:
+        print("Found NaNs in labels:", nan_results)
+    else:
+        print("No NaNs found in labels across folds and splits.")
