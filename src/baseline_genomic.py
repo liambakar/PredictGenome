@@ -18,7 +18,7 @@ import torch
 import tqdm
 import numpy as np
 import matplotlib.pyplot as plt
-# from lifelines.utils import concordance_index
+from lifelines.utils import concordance_index
 
 if torch.cuda.is_available():
     device = torch.device("cuda")
@@ -92,18 +92,23 @@ def train_loop(
             output = model(reshaped_input)
             test_preds.append(output.cpu())
 
-        all_outputs_tensor = torch.cat(test_preds, dim=0)
-        predicted_indices = torch.argmax(all_outputs_tensor, dim=1).numpy()
+        y_pred = torch.cat(test_preds, dim=0)
 
-        assert len(predicted_indices) == len(test_labels)
+        # Calculate c-index (use risk_score and true labels)
+        high_risk_class_index = int(test_labels.max())
+        risk_score = y_pred[:, high_risk_class_index]
+        if test_labels is not None and len(np.unique(test_labels)) > 1:
+            c_index = concordance_index(test_labels, risk_score)
+        else:
+            print("Cannot compute c-index (not enough classes in y_test)")
+            c_index = -float('inf')
 
+        # Calculate accuracy
+        predicted_indices = torch.argmax(y_pred, dim=1).numpy()
         correct = (predicted_indices == test_labels.squeeze(1)).sum()
 
         total = test_labels.shape[0]
         test_acc = float(correct) / total if total > 0 else 0.0
-
-        # calculate c_index
-        c_index = float('inf')
 
     save_dir = os.path.join(os.path.dirname(__file__), 'checkpoints')
     os.makedirs(save_dir, exist_ok=True)
@@ -125,12 +130,14 @@ if __name__ == "__main__":
     DROPOUT_RATE = 0.1
 
     test_accuracies = []
-
+    c_indices = []
     train_losses = []
 
     print(f'Training on device: {device}')
     if device == "cuda":
         print(f'Using {torch.cuda.device_count()}')
+
+    print('\n\n')
 
     for fold_idx, fold in enumerate(folds):
 
@@ -169,6 +176,30 @@ if __name__ == "__main__":
 
         test_accuracies.append(test_acc)
         train_losses.append(train_loss)
+        c_indices.append(c_index)
+
+    test_accuracies = np.array(test_accuracies)
+    mean_acc = np.mean(
+        test_accuracies) if test_accuracies.size > 0 else 0
+    std_acc = np.std(
+        test_accuracies) if test_accuracies.size > 0 else 0
+    mean_acc_percent = mean_acc * 100
+    std_acc_percent = std_acc * 100
+    format_string = f"{{:.{2}f}}%"
+    mean_str = format_string.format(mean_acc_percent)
+    std_str = format_string.format(std_acc_percent)
+
+    c_indices = np.array(c_indices)
+    mean_c_index = np.mean(
+        c_indices) if c_indices.size > 0 else 0
+    std_c_index = np.std(
+        c_indices) if c_indices.size > 0 else 0
+
+    # print(f"Fold Accuracies: {test_accuracies}")
+    print(f"Mean Test Accuracy: {mean_str} ± {std_str}")
+    # print(f"Fold C-indices: {c_indices}")
+    print(f"Mean C-Index: {mean_c_index:.4f} ± {std_c_index:.4f}")
+    print(f"(K={len(test_accuracies)} folds)")
 
     plt.figure(figsize=(10, 8))
     for i, loss in enumerate(train_losses):
@@ -178,18 +209,3 @@ if __name__ == "__main__":
     plt.ylabel('Training Loss')
     plt.xlabel('Iteration')
     plt.show()
-
-    test_accuracies = np.array(test_accuracies)
-    mean_acc = np.mean(
-        test_accuracies) if test_accuracies.size > 0 else 0
-    std_acc = np.std(
-        test_accuracies) if test_accuracies.size > 0 else 0
-    mean_acc_percent = mean_acc * 100
-    std_acc_percent = std_acc * 100
-    format_string = f"{{:.{3}f}}%"
-    mean_str = format_string.format(mean_acc_percent)
-    std_str = format_string.format(std_acc_percent)
-
-    print(f"Fold Accuracies: {test_accuracies}")
-    print(f"Mean Test Accuracy: {mean_str} ± {std_str}")
-    print(f"(K={len(test_accuracies)} folds)")
