@@ -9,7 +9,7 @@ from utils.training_utils import (
     get_lr_scheduler,
     get_optim,
     print_network,
-    save_checkpoint
+    save_checkpoint,
 )
 from typing import Iterable
 
@@ -37,6 +37,7 @@ def train_loop(
     loss_func: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
     lr_scheduler: torch.optim.lr_scheduler.LRScheduler,
+    save_model: bool = False,
 ) -> tuple[list[float], float, float]:
 
     train_loss = []
@@ -110,9 +111,10 @@ def train_loop(
         total = test_labels.shape[0]
         test_acc = float(correct) / total if total > 0 else 0.0
 
-    save_dir = os.path.join(os.path.dirname(__file__), 'checkpoints')
-    os.makedirs(save_dir, exist_ok=True)
-    save_checkpoint(fold_idx, model, test_acc, save_dir)
+    if save_model:
+        save_dir = os.path.join(os.path.dirname(__file__), 'checkpoints')
+        os.makedirs(save_dir, exist_ok=True)
+        save_checkpoint(fold_idx, model, test_acc, save_dir)
 
     return train_loss, test_acc, c_index
 
@@ -122,12 +124,6 @@ if __name__ == "__main__":
 
     loss_fn = torch.nn.CrossEntropyLoss()
     NUM_CLASSES = 4
-    EMBED_DIM = 128
-    NUM_COATTENTION_QUERIES = 16
-    NUM_ATTN_HEADS = 8
-    NUM_TRANSFORMER_LAYERS = 4
-    DIM_FEEDFORWARD = 512
-    DROPOUT_RATE = 0.1
 
     test_accuracies = []
     c_indices = []
@@ -143,7 +139,7 @@ if __name__ == "__main__":
 
         print(f'Training fold {fold_idx}...\n')
 
-        batchsize = 32
+        batchsize = 16
 
         feature_cols = list(fold['train'].columns[1:-1])
         label_col = 'disc_label'
@@ -159,12 +155,17 @@ if __name__ == "__main__":
         test_data = OnlyGenomicDataset(fold['test'], feature_cols, label_col)
 
         model = HallmarkSurvivalModel(
-            len(feature_cols), NUM_CLASSES).to(device)
+            len(feature_cols),
+            NUM_CLASSES,
+            hallmark_embedding_dim=32,
+            cnn_filters=64,
+            cnn_kernel_size=3
+        ).to(device)
 
         # print_network(model)
 
         epochs = 30
-        optimizer = get_optim('adamW', model)
+        optimizer = get_optim('adamW', model, lr=1e-2)
         lr_scheduler = get_lr_scheduler(epochs, optimizer, len(dataloader))
 
         train_loss, test_acc, c_index = train_loop(

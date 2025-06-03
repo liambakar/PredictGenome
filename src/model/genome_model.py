@@ -13,8 +13,8 @@ class HallmarkSurvivalModel(nn.Module):
     def __init__(self,
                  M,
                  N_CLASSES,
-                 hallmark_embedding_dim=128,  # Dimension of embedding from feature processing
-                 cnn_filters=32,
+                 hallmark_embedding_dim=64,  # Dimension of embedding from feature processing
+                 cnn_filters=8,
                  cnn_kernel_size=3,
                  fc1_units=256,
                  fc2_units=128,
