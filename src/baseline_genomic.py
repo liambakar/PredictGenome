@@ -9,6 +9,7 @@ from utils.training_utils import (
     get_lr_scheduler,
     get_optim,
     save_checkpoint,
+    calculate_c_index,
 )
 
 import os
@@ -16,7 +17,6 @@ import torch
 import tqdm
 import numpy as np
 import matplotlib.pyplot as plt
-from lifelines.utils import concordance_index
 
 if torch.cuda.is_available():
     device = torch.device("cuda")
@@ -93,13 +93,7 @@ def train_loop(
         y_pred = torch.cat(test_preds, dim=0)
 
         # Calculate c-index (use risk_score and true labels)
-        high_risk_class_index = int(test_labels.max())
-        risk_score = y_pred[:, high_risk_class_index]
-        if test_labels is not None and len(np.unique(test_labels)) > 1:
-            c_index = concordance_index(test_labels, risk_score)
-        else:
-            print("Cannot compute c-index (not enough classes in y_test)")
-            c_index = -float('inf')
+        c_index = calculate_c_index(y_pred, test_labels)
 
         # Calculate accuracy
         predicted_indices = torch.argmax(y_pred, dim=1).numpy()

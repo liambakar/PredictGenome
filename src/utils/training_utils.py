@@ -1,10 +1,8 @@
-from sklearn.impute import SimpleImputer
 import torch.optim as optim
 import torch
-from sklearn.preprocessing import StandardScaler
 import os
-import pandas as pd
 import numpy as np
+from lifelines.utils import concordance_index
 
 from transformers.optimization import (get_constant_schedule_with_warmup,
                                        get_linear_schedule_with_warmup,
@@ -80,3 +78,14 @@ def save_checkpoint(fold: int, model: torch.nn.Module, score: float, save_dir: s
     save_path = os.path.join(save_dir, f'ckpt_fold_{fold}.pth')
 
     torch.save(save_state, save_path)
+
+
+def calculate_c_index(y_pred, y_true):
+    high_risk_class_index = int(y_true.max())
+    risk_score = y_pred[:, high_risk_class_index]
+    if y_true is not None and len(np.unique(y_true)) > 1:
+        c_index = concordance_index(y_true, risk_score)
+    else:
+        print("Cannot compute c-index (not enough classes in y_test)")
+        c_index = -float('inf')
+    return c_index
