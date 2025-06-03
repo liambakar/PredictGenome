@@ -8,10 +8,8 @@ from utils.get_dataset import (
 from utils.training_utils import (
     get_lr_scheduler,
     get_optim,
-    print_network,
     save_checkpoint,
 )
-from typing import Iterable
 
 import os
 import torch
@@ -63,13 +61,12 @@ def train_loop(
 
             optimizer.zero_grad()
 
-            train_loss.append(loss.item())
-
             running_loss += loss.item()
 
             # insert validation?
 
         print(f'Epoch {epoch+1}/{epochs} Loss: {running_loss}')
+        train_loss.append(running_loss)
 
     # find test_accuracy
 
@@ -139,7 +136,7 @@ if __name__ == "__main__":
 
         print(f'Training fold {fold_idx}...\n')
 
-        batchsize = 16
+        batchsize = 64
 
         feature_cols = list(fold['train'].columns[1:-1])
         label_col = 'disc_label'
@@ -157,15 +154,15 @@ if __name__ == "__main__":
         model = HallmarkSurvivalModel(
             len(feature_cols),
             NUM_CLASSES,
-            hallmark_embedding_dim=32,
-            cnn_filters=64,
+            hallmark_embedding_dim=256,
+            cnn_filters=32,
             cnn_kernel_size=3
         ).to(device)
 
         # print_network(model)
 
         epochs = 30
-        optimizer = get_optim('adamW', model, lr=1e-2)
+        optimizer = get_optim('adamW', model, lr=1e-3)
         lr_scheduler = get_lr_scheduler(epochs, optimizer, len(dataloader))
 
         train_loss, test_acc, c_index = train_loop(

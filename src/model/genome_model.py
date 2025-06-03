@@ -2,7 +2,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch
 
-from model.modules import HallmarkFeatureProcessor
+from model.modules import HallmarkFeatureProcessor, PositionalEncoding
 
 
 class HallmarkSurvivalModel(nn.Module):
@@ -16,9 +16,12 @@ class HallmarkSurvivalModel(nn.Module):
                  hallmark_embedding_dim=64,  # Dimension of embedding from feature processing
                  cnn_filters=8,
                  cnn_kernel_size=3,
-                 fc1_units=256,
-                 fc2_units=128,
-                 dropout_rate=0.4):
+                 fc1_units=512,
+                 fc2_units=256,
+                 fc3_units=128,
+                 dropout_rate=0.4,
+                 num_transformer_heads=8,
+                 num_transformer_layers=2):
         """
         Main network for multiclass survival classification with variable length hallmarks.
 
@@ -43,8 +46,29 @@ class HallmarkSurvivalModel(nn.Module):
             cnn_kernel_size=cnn_kernel_size
         )
 
+        self.positional_encoding = PositionalEncoding(
+            d_model=hallmark_embedding_dim,
+            max_len=M
+        )
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=hallmark_embedding_dim,
+            nhead=num_transformer_heads,
+            dim_feedforward=4 * hallmark_embedding_dim,  # Typical feedforward dim
+            dropout=dropout_rate,
+            # Important: Input (batch_size, seq_len, features)
+            batch_first=True
+        )
+        self.transformer_encoder = nn.TransformerEncoder(
+            encoder_layer,
+            num_layers=num_transformer_layers
+        )
+
+        self.conv1 = nn.Conv2d(1, 3, 5)
+        self.pool1 = nn.MaxPool2d(2, 2)
+
         # Calculate the total number of features after processing all M hallmarks
         self.concatenated_features_dim = M * hallmark_embedding_dim
+        self.hallmark_embedding_dim = hallmark_embedding_dim
 
         # Fully connected backbone
         self.fc1 = nn.Linear(self.concatenated_features_dim, fc1_units)
@@ -55,8 +79,12 @@ class HallmarkSurvivalModel(nn.Module):
         self.bn_fc2 = nn.BatchNorm1d(fc2_units)
         self.dropout2 = nn.Dropout(dropout_rate)
 
+        self.fc3 = nn.Linear(fc2_units, fc3_units)
+        self.bn_fc3 = nn.BatchNorm1d(fc3_units)
+        self.dropout3 = nn.Dropout(dropout_rate)
+
         # Output layer
-        self.output_fc = nn.Linear(fc2_units, N_CLASSES)
+        self.output_fc = nn.Linear(fc3_units, N_CLASSES)
 
     def forward(self, list_of_hallmark_data):
         """
@@ -86,12 +114,17 @@ class HallmarkSurvivalModel(nn.Module):
             embedding_i = self.hallmark_processor(x_i_cnn_input)
             processed_embeddings.append(embedding_i)
 
+        processed_embeddings = torch.stack(processed_embeddings, dim=1)
+        embed_with_pos = self.positional_encoding(processed_embeddings)
+        transformer_out = self.transformer_encoder(embed_with_pos)
+        flattened = torch.flatten(transformer_out, start_dim=1)
+
         # Concatenate embeddings from all M hallmarks
         # List of M tensors of shape (batch_size, hallmark_embedding_dim)
         # -> single tensor of shape (batch_size, M * hallmark_embedding_dim)
-        concatenated_features = torch.cat(processed_embeddings, dim=1)
+        # concatenated_features = torch.cat(processed_embeddings, dim=1)
 
-        out = self.fc1(concatenated_features)
+        out = self.fc1(flattened)
         out = self.bn_fc1(out)
         out = F.relu(out)
         out = self.dropout1(out)
@@ -100,6 +133,11 @@ class HallmarkSurvivalModel(nn.Module):
         out = self.bn_fc2(out)
         out = F.relu(out)
         out = self.dropout2(out)
+
+        out = self.fc3(out)
+        out = self.bn_fc3(out)
+        out = F.relu(out)
+        out = self.dropout3(out)
 
         logits = self.output_fc(out)
 
