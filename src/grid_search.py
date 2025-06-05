@@ -4,7 +4,8 @@ from matplotlib import pyplot as plt
 
 from baseline_genomic import train_loop
 from model.genome_model import HallmarkSurvivalModel
-from utils.get_dataset import OnlyGenomicDataset, convert_df_to_dataloader, convert_to_32_bit, get_final_rna_folds
+from utils.datasets import OnlyGenomicDataset
+from utils.get_dataset import convert_to_32_bit, get_rna_folds
 from utils.training_utils import get_lr_scheduler, get_optim
 
 if torch.cuda.is_available():
@@ -33,7 +34,7 @@ hyperparameters = [
 
 
 if __name__ == "__main__":
-    datasets = get_final_rna_folds()[0]
+    datasets = get_rna_folds()[0]
     print(f"\n\nTotal hyperparameter combinations: {len(hyperparameters)}")
     print(f"Only using first fold as dataset.")
     loss_fn = torch.nn.CrossEntropyLoss()
@@ -71,8 +72,9 @@ if __name__ == "__main__":
         print(f"\tcnn_kernel_size: {cnn_kernel_size}")
         print(f"\toptimizer: {optimizer}")
 
-        dataloader = convert_df_to_dataloader(
-            datasets['train'], feature_cols, label_col, batch_size=batch_size)
+        train_data = OnlyGenomicDataset(
+            datasets['train'], feature_cols, label_col)
+        dataloader = train_data.get_dataloader(batch_size=batch_size)
 
         test_data = OnlyGenomicDataset(
             datasets['test'], feature_cols, label_col)

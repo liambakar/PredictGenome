@@ -13,8 +13,8 @@ class HallmarkSurvivalModel(nn.Module):
     def __init__(self,
                  M,
                  N_CLASSES,
-                 hallmark_embedding_dim=64,  # Dimension of embedding from feature processing
-                 cnn_filters=8,
+                 hallmark_embedding_dim=256,  # Dimension of embedding from feature processing
+                 cnn_filters=32,
                  cnn_kernel_size=3,
                  fc1_units=512,
                  fc2_units=256,
@@ -86,7 +86,7 @@ class HallmarkSurvivalModel(nn.Module):
         # Output layer
         self.output_fc = nn.Linear(fc3_units, N_CLASSES)
 
-    def forward(self, list_of_hallmark_data):
+    def forward_without_classification(self, list_of_hallmark_data):
         """
         Forward pass.
 
@@ -139,6 +139,67 @@ class HallmarkSurvivalModel(nn.Module):
         out = F.relu(out)
         out = self.dropout3(out)
 
-        logits = self.output_fc(out)
+        return out
 
+    def forward(self, list_of_hallmark_data):
+        out = self.forward_without_classification(list_of_hallmark_data)
+        logits = self.output_fc(out)
+        return logits
+
+
+class MultimodalHallmarkSurvivalModel(nn.Module):
+
+    def __init__(self,
+                 M,
+                 N_CLASSES,
+                 clinical_input_dim,
+                 hallmark_embedding_dim=256,
+                 cnn_filters=32,
+                 cnn_kernel_size=3,
+                 fc1_units=512,
+                 fc2_units=256,
+                 fc3_units=128,
+                 clinical_fc_units=64,
+                 dropout_rate=0.4,
+                 num_transformer_heads=8,
+                 num_transformer_layers=2):
+        super(MultimodalHallmarkSurvivalModel, self).__init__()
+        self.hallmark_model = HallmarkSurvivalModel(
+            M=M,
+            N_CLASSES=N_CLASSES,
+            hallmark_embedding_dim=hallmark_embedding_dim,
+            cnn_filters=cnn_filters,
+            cnn_kernel_size=cnn_kernel_size,
+            fc1_units=fc1_units,
+            fc2_units=fc2_units,
+            fc3_units=fc3_units,
+            dropout_rate=dropout_rate,
+            num_transformer_heads=num_transformer_heads,
+            num_transformer_layers=num_transformer_layers
+        )
+        self.clinical_fc = nn.Sequential(
+            nn.Linear(clinical_input_dim, clinical_fc_units),
+            nn.BatchNorm1d(clinical_fc_units),
+            nn.ReLU(),
+            nn.Dropout(dropout_rate)
+        )
+        # Combine hallmark and clinical features
+        self.combined_fc = nn.Sequential(
+            nn.Linear(fc3_units + clinical_fc_units, 128),
+            nn.BatchNorm1d(128),
+            nn.ReLU(),
+            nn.Dropout(dropout_rate),
+            nn.Linear(128, N_CLASSES)
+        )
+
+    def forward(self, list_of_hallmark_data, clinical_data):
+        # Hallmark branch
+        hallmark_features = self.hallmark_model.forward_without_classification(
+            list_of_hallmark_data
+        )
+        # Clinical branch
+        clinical_features = self.clinical_fc(clinical_data)
+        # Concatenate
+        combined = torch.cat([hallmark_features, clinical_features], dim=1)
+        logits = self.combined_fc(combined)
         return logits

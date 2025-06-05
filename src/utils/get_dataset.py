@@ -1,22 +1,9 @@
 import os
 import pandas as pd
-import torch
-from torch.utils.data import Dataset, DataLoader
 import numpy as np
 from sklearn.model_selection import StratifiedKFold
-from typing import Union
 
-from utils.extract_pathway import extract_pathway_summary, load_hallmark_signatures
-
-
-def get_rna_df():
-    base_dir = os.path.join(os.path.dirname(
-        os.path.dirname(os.path.dirname(__file__))), 'datasets/rna_clean.csv')
-    df = pd.read_csv(base_dir)
-    # removes last 3 characters from each string in 'sample'
-    df['sample'] = df['sample'].apply(lambda x: x[:-3])
-    df = df.drop('Unnamed: 0', axis=1)
-    return df
+from baseline_clinical_r import feature_selection, preprocess_features
 
 
 def convert_to_32_bit(df: pd.DataFrame) -> pd.DataFrame:
@@ -31,65 +18,16 @@ def convert_to_32_bit(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def get_folded_rna_dataset():
-    base_dir = os.path.join(os.path.dirname(
-        os.path.dirname(os.path.dirname(__file__))), 'clinical_csv')
-    cv_folders = [f for f in os.listdir(
-        base_dir) if os.path.isdir(os.path.join(base_dir, f))]
-
-    folds = []
-    rna_path = os.path.join(os.path.dirname(
-        os.path.dirname(os.path.dirname(__file__))), 'datasets/rna_clean.csv')
-
-    Hallmark_pathway_path = os.path.join(os.path.dirname(
-        os.path.dirname(os.path.dirname(__file__))), 'datasets/hallmarks_signatures.csv')
-
-    expr = pd.read_csv(rna_path)
-    signatures = load_hallmark_signatures(Hallmark_pathway_path)
-    sample_ids, sample_paths = extract_pathway_summary(expr, signatures)
-
-    rna_df = pd.DataFrame(sample_paths)
-    rna_df.insert(loc=0, column='sample', value=sample_ids)
-    rna_df['sample'] = rna_df['sample'].apply(lambda x: x[:-3])
-
-    rna_df.to_csv(os.path.join(os.path.dirname(
-        os.path.dirname(os.path.dirname(__file__))), 'datasets/rna_pathways.csv'))
-
-    for folder in cv_folders:
-        folder_path = os.path.join(base_dir, folder)
-        train_path = os.path.join(folder_path, 'train.csv')
-        test_path = os.path.join(folder_path, 'test.csv')
-
-        if os.path.exists(train_path) and os.path.exists(test_path):
-            print(f"\n=== Processing folder: {folder} ===")
-
-            train_df = pd.read_csv(train_path)
-            test_df = pd.read_csv(test_path)
-            # only use labels and keys
-            test_df = test_df[['case_id', 'disc_label']]
-            train_df = train_df[['case_id', 'disc_label']]
-            # merge rna data with train and test for folds
-            train_merged = pd.merge(
-                train_df, rna_df, how='inner', left_on='case_id', right_on='sample')
-            train_merged = train_merged.drop('sample', axis=1)
-            test_merged = pd.merge(
-                test_df, rna_df, how='inner', left_on='case_id', right_on='sample')
-            test_merged = test_merged.drop('sample', axis=1)
-
-            print(f'Train shape: {train_merged.shape}')
-            print(f'Test shape: {test_merged.shape}')
-
-            folds.append({'train': train_merged, 'test': test_merged})
-
-    print(f'\nSuccessfully retrieved {len(folds)} folds.\n')
-
-    return folds
-
-
-def get_final_rna_folds(json_dataset_path: str = 'datasets/final_dataset.json', k_splits: int = 5, shuffle: bool = True) -> list[dict[str, pd.DataFrame]]:
+def get_rna_dataset(json_dataset_path: str):
     json_dataset_path = os.path.join(os.path.dirname(
         os.path.dirname(os.path.dirname(__file__))), json_dataset_path)
     df = pd.read_json(json_dataset_path, lines=True)
+    feature_cols = list(df.columns[1:-1])
+    return df, feature_cols
+
+
+def get_rna_folds(json_dataset_path: str = 'datasets/final_dataset.json', k_splits: int = 5, shuffle: bool = True) -> list[dict[str, pd.DataFrame]]:
+    df, _ = get_rna_dataset(json_dataset_path)
     kf = StratifiedKFold(n_splits=k_splits, shuffle=shuffle)
     y = df['disc_label']
     x = df.drop('disc_label', axis=1)
@@ -111,44 +49,85 @@ def get_final_rna_folds(json_dataset_path: str = 'datasets/final_dataset.json', 
     return folds
 
 
-class OnlyGenomicDataset(Dataset):
+def get_all_clinical_data(path_to_clinical: str):
+    base_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        path_to_clinical
+    )
+    cv_folders = []
+    for f in os.listdir(base_dir):
+        folder_path = os.path.join(base_dir, f)
+        if os.path.isdir(folder_path):
+            cv_folders.append(folder_path)
 
-    def __init__(self, df: pd.DataFrame, feature_cols: list[str], label_col: str):
-        self.df = df.copy()
-        self.df.reset_index(drop=True)
-        for col in self.df.columns:
-            if isinstance(self.df[col].values[0], (list, tuple)):
-                self.df[col] = self.df[col].apply(np.array)
-        self.feature_cols = feature_cols
-        self.label_col = label_col
+    dfs = []
+    for f in cv_folders:
+        train_path = os.path.join(f, 'train.csv')
+        test_path = os.path.join(f, 'test.csv')
+        if os.path.exists(train_path):
+            train_df = pd.read_csv(train_path)
+            dfs.append(train_df)
+        if os.path.exists(test_path):
+            test_df = pd.read_csv(test_path)
+            dfs.append(test_df)
+    combined_df = pd.concat(dfs, ignore_index=True)
+    combined_df = combined_df.drop_duplicates()
 
-    def __len__(self) -> int:
-        return len(self.df)
-
-    def __getitem__(self, index) -> tuple[list, torch.Tensor]:
-        row = self.df.iloc[index]
-        features = list(row.loc[self.feature_cols].values)
-        for i, f in enumerate(features):
-            features[i] = torch.tensor(f, dtype=torch.float32)
-
-        label = torch.tensor(pd.to_numeric(
-            row[self.label_col], downcast='float'), dtype=torch.float32)
-        return features, label
-
-    def get_labels(self) -> np.ndarray:
-        return self.df[[self.label_col]].values
-
-    def get_features(self) -> np.ndarray:
-        return self.df[self.feature_cols].values
+    return combined_df
 
 
-def convert_df_to_dataloader(
-    df: pd.DataFrame,
-    feature_cols: list[str],
-    label_col: str,
-    batch_size: int,
-    shuffle: bool = True,
-) -> torch.utils.data.DataLoader:
-    dataset = OnlyGenomicDataset(df, feature_cols, label_col)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
-    return dataloader
+def merge_clinical_and_genomic(
+        clinical_df: pd.DataFrame,
+        genomic_df: pd.DataFrame
+) -> tuple[pd.DataFrame, list]:
+    clinical_cols = feature_selection(clinical_df, multimodal=True)
+    clinical_features, _, _, _ = preprocess_features(
+        clinical_df,
+        clinical_cols
+    )
+
+    merged = pd.merge(
+        left=genomic_df,
+        right=clinical_features,
+        how='left',
+        left_on='sample_id',
+        right_on='case_id',
+    )
+    merged = merged.drop(columns=['case_id'])
+    clinical_cols.remove('case_id')
+    return merged, clinical_cols
+
+
+def get_clinical_and_genomic_data(
+    path_to_clinical: str = 'clinical_csv_consistent',
+    json_dataset_path: str = 'datasets/final_dataset.json',
+) -> tuple[pd.DataFrame, list, list]:
+    rna_df, rna_feature_cols = get_rna_dataset(json_dataset_path)
+    print('Retrieved Genomic Dataset.')
+    clinical_df = get_all_clinical_data(path_to_clinical)
+    print('Retrieved Clinical Dataset.')
+    merged, clinical_cols = merge_clinical_and_genomic(clinical_df, rna_df)
+    print('Merged Genomic and Clinical Datasets.')
+    return merged, clinical_cols, rna_feature_cols
+
+
+def get_merged_folds(df, k_splits=5, shuffle=True):
+    kf = StratifiedKFold(n_splits=k_splits, shuffle=shuffle)
+    y = df['disc_label']
+    x = df.drop('disc_label', axis=1)
+    x = x.apply(lambda x: np.array(x))
+    folds = []
+    for i, (train_i, test_i) in enumerate(kf.split(x, y)):
+
+        print(f"\n==== Fold {i} ====")
+
+        train_df = df.iloc[train_i]
+        test_df = df.iloc[test_i]
+
+        print(f'Train shape: {train_df.shape}')
+        print(f'Test shape: {test_df.shape}')
+
+        folds.append({'train': train_df, 'test': test_df})
+
+    print(f'\nSuccessfully retrieved {len(folds)} folds.\n')
+    return folds
