@@ -18,7 +18,7 @@ cidx_list = []
 def feature_selection(df, multimodal=False):
     selected_features = [
         'cancer_type_detailed',
-        'tissue_source_site',
+        # 'tissue_source_site',
         'OncoTreeSiteCode',
         'age_at_initial_pathologic_diagnosis',
         'race',
@@ -29,8 +29,8 @@ def feature_selection(df, multimodal=False):
         'initial_pathologic_dx_year',
         'menopause_status',
         # 'birth_days_to',
-        'vital_status',
-        'tumor_status',
+        # 'vital_status',
+        # 'tumor_status',
         'margin_status'
     ]
     if multimodal:

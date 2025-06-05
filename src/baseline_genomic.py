@@ -89,7 +89,6 @@ def train_loop(
     with torch.no_grad():
         if run_multimodal:
             test_genomic_features, test_clinical_features = test_data.get_features()
-            print(len(test_genomic_features), len(test_clinical_features))
         else:
             test_genomic_features = test_data.get_features()
 
