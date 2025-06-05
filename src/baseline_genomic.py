@@ -1,8 +1,18 @@
-from model.genome_model import HallmarkSurvivalModel
+import matplotlib.pyplot as plt
+import numpy as np
+import tqdm
+import torch
+import os
+from model.genome_model import HallmarkSurvivalModel, MultimodalHallmarkSurvivalModel
+from utils.datasets import (
+    GenomicAndClinicalDataset,
+    PDataset,
+    OnlyGenomicDataset
+)
 from utils.get_dataset import (
-    get_final_rna_folds,
-    convert_df_to_dataloader,
-    OnlyGenomicDataset,
+    get_clinical_and_genomic_data,
+    get_merged_folds,
+    get_rna_folds,
     convert_to_32_bit
 )
 from utils.training_utils import (
@@ -11,12 +21,12 @@ from utils.training_utils import (
     save_checkpoint,
     calculate_c_index,
 )
+import pandas as pd
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
+warnings.simplefilter(
+    action='ignore', category=pd.errors.SettingWithCopyWarning)
 
-import os
-import torch
-import tqdm
-import numpy as np
-import matplotlib.pyplot as plt
 
 if torch.cuda.is_available():
     device = torch.device("cuda")
@@ -31,11 +41,12 @@ def train_loop(
     epochs: int,
     fold_idx: int,
     dataloader: torch.utils.data.DataLoader,
-    test_data: OnlyGenomicDataset,
+    test_data: PDataset,
     loss_func: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
     lr_scheduler: torch.optim.lr_scheduler.LRScheduler,
     save_model: bool = False,
+    run_multimodal: bool = False,
 ) -> tuple[list[float], float, float]:
 
     train_loss = []
@@ -45,13 +56,17 @@ def train_loop(
 
         running_loss = 0
 
-        for features, label in tqdm.tqdm(dataloader):
-
+        for batch in tqdm.tqdm(dataloader):
+            if run_multimodal:
+                features, clinical_features, label = batch
+                features = [feature.to(device) for feature in features]
+                clinical_features = clinical_features.to(device)
+                out = model(features, clinical_features)
+            else:
+                features, label = batch
+                features = [feature.to(device) for feature in features]
+                out = model(features)
             label = label.to(device)
-
-            features = [feature.to(device) for feature in features]
-
-            out = model(features)
 
             loss = loss_func(out, label)
 
@@ -72,11 +87,17 @@ def train_loop(
 
     model.eval()
     with torch.no_grad():
-        test_features, test_labels = test_data.get_features(), test_data.get_labels()
+        if run_multimodal:
+            test_genomic_features, test_clinical_features = test_data.get_features()
+            print(len(test_genomic_features), len(test_clinical_features))
+        else:
+            test_genomic_features = test_data.get_features()
+
+        test_labels = test_data.get_labels()
         test_preds = []  # To store output logits for each sample
 
-        for sample_idx in range(len(test_features)):
-            test_sample = test_features[sample_idx]
+        for sample_idx in range(len(test_genomic_features)):
+            test_sample = test_genomic_features[sample_idx]
             # It needs to be a list of M tensors, where each tensor is shape (1, L_j)
             reshaped_input = []
             for hallmark in test_sample:
@@ -87,7 +108,16 @@ def train_loop(
                 hallmark_tensor_batched = hallmark_tensor.unsqueeze(0)
                 reshaped_input.append(hallmark_tensor_batched)
 
-            output = model(reshaped_input)
+            if run_multimodal:
+                output = model(
+                    reshaped_input,
+                    torch.tensor(
+                        test_clinical_features[sample_idx],  # type: ignore
+                        device=device
+                    ).unsqueeze(dim=0)
+                )
+            else:
+                output = model(reshaped_input)
             test_preds.append(output.cpu())
 
         y_pred = torch.cat(test_preds, dim=0)
@@ -111,7 +141,8 @@ def train_loop(
 
 
 if __name__ == "__main__":
-    folds = get_final_rna_folds()
+    full_dataset, clinical_cols, rna_feature_cols = get_clinical_and_genomic_data()
+    folds = get_merged_folds(full_dataset)
 
     loss_fn = torch.nn.CrossEntropyLoss()
     NUM_CLASSES = 4
@@ -132,25 +163,33 @@ if __name__ == "__main__":
 
         batchsize = 64
 
-        feature_cols = list(fold['train'].columns[1:-1])
         label_col = 'disc_label'
 
         if device.type == "mps":
             fold['train'] = convert_to_32_bit(fold['train'])
             fold['test'] = convert_to_32_bit(fold['test'])
 
-        dataloader = convert_df_to_dataloader(
-            fold['train'], feature_cols, label_col, batch_size=batchsize
+        train_data = GenomicAndClinicalDataset(
+            fold['train'], rna_feature_cols, clinical_cols, label_col
+        )
+        dataloader = train_data.get_dataloader(batch_size=batchsize)
+
+        test_data = GenomicAndClinicalDataset(
+            fold['test'], rna_feature_cols, clinical_cols, label_col
         )
 
-        test_data = OnlyGenomicDataset(fold['test'], feature_cols, label_col)
+        # model = HallmarkSurvivalModel(
+        #     len(rna_feature_cols),
+        #     NUM_CLASSES,
+        #     hallmark_embedding_dim=256,
+        #     cnn_filters=32,
+        #     cnn_kernel_size=3
+        # ).to(device)
 
-        model = HallmarkSurvivalModel(
-            len(feature_cols),
-            NUM_CLASSES,
-            hallmark_embedding_dim=256,
-            cnn_filters=32,
-            cnn_kernel_size=3
+        model = MultimodalHallmarkSurvivalModel(
+            M=len(rna_feature_cols),
+            N_CLASSES=NUM_CLASSES,
+            clinical_input_dim=len(clinical_cols)
         ).to(device)
 
         # print_network(model)
@@ -160,7 +199,7 @@ if __name__ == "__main__":
         lr_scheduler = get_lr_scheduler(epochs, optimizer, len(dataloader))
 
         train_loss, test_acc, c_index = train_loop(
-            model, epochs, fold_idx, dataloader, test_data, loss_fn, optimizer, lr_scheduler)
+            model, epochs, fold_idx, dataloader, test_data, loss_fn, optimizer, lr_scheduler, run_multimodal=True)
 
         print(
             f'\nFold {fold_idx} had a test accuracy of {test_acc:.2%} and a c-index of {c_index:.4f}')
