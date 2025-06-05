@@ -111,7 +111,7 @@ def get_clinical_and_genomic_data(
     return merged, clinical_cols, rna_feature_cols
 
 
-def get_merged_folds(df, k_splits=5, shuffle=True):
+def get_merged_folds(df, k_splits=5, shuffle=True) -> list[dict[str, pd.DataFrame]]:
     kf = StratifiedKFold(n_splits=k_splits, shuffle=shuffle)
     y = df['disc_label']
     x = df.drop('disc_label', axis=1)
