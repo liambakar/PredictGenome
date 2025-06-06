@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import torch
 from model.genome_model import HallmarkSurvivalModel, MultimodalHallmarkSurvivalModel
+from model.gcn_model import GCNGenomicModel, CorrelationBasedGCNModel
 from utils.datasets import (
     GenomicAndClinicalDataset,
     OnlyGenomicDataset
@@ -93,15 +94,27 @@ def main(
                 fold['test'], rna_feature_cols, label_col
             )
 
-            model = HallmarkSurvivalModel(
-                len(rna_feature_cols),
-                NUM_CLASSES,
-                hallmark_embedding_dim=256,
-                cnn_filters=32,
-                cnn_kernel_size=3
+            # 使用GCN模型替代原有的HallmarkSurvivalModel
+            model = GCNGenomicModel(
+                num_features=len(rna_feature_cols),
+                num_classes=NUM_CLASSES,
+                feature_embedding_dim=64,
+                gcn_hidden_dims=[128, 64],
+                classifier_dims=[256, 128, 64],
+                dropout_rate=0.4
             ).to(device)
 
-        epochs = 15
+            # 如果要使用基于相关性的GCN模型，可以使用以下代码：
+            # model = CorrelationBasedGCNModel(
+            #     num_features=len(rna_feature_cols),
+            #     num_classes=NUM_CLASSES,
+            #     feature_embedding_dim=64,
+            #     gcn_hidden_dims=[128, 64],
+            #     classifier_dims=[256, 128, 64],
+            #     dropout_rate=0.4
+            # ).to(device)
+
+        epochs = 30
         optimizer = get_optim('adamW', model, lr=1e-3)
         lr_scheduler = get_lr_scheduler(epochs, optimizer, len(dataloader))
 

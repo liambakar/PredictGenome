@@ -150,14 +150,14 @@ def train_loop(
         for batch in tqdm.tqdm(dataloader):
             if run_multimodal:
                 features, clinical_features, label = batch
-                features = [feature.to(device) for feature in features]
-                clinical_features = clinical_features.to(device)
+                features = [feature.to(device).float() for feature in features]
+                clinical_features = clinical_features.to(device).float()
                 out = model(features, clinical_features)
             else:
                 features, label = batch
-                features = [feature.to(device) for feature in features]
+                features = [feature.to(device).float() for feature in features]
                 out = model(features)
-            label = label.to(device)
+            label = label.to(device).long()
 
             loss = loss_func(out, label)
 
@@ -193,7 +193,7 @@ def train_loop(
             for hallmark in test_sample:
                 # Shape: (L_j,)
                 hallmark_tensor = torch.from_numpy(
-                    hallmark).to(device)
+                    hallmark).to(device).float()
                 # Shape: (1, L_j)
                 hallmark_tensor_batched = hallmark_tensor.unsqueeze(0)
                 reshaped_input.append(hallmark_tensor_batched)
@@ -203,7 +203,8 @@ def train_loop(
                     reshaped_input,
                     torch.tensor(
                         test_clinical_features[sample_idx],  # type: ignore
-                        device=device
+                        device=device,
+                        dtype=torch.float32
                     ).unsqueeze(dim=0)
                 )
             else:

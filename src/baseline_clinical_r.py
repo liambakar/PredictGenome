@@ -177,5 +177,5 @@ def main():
     std_cidx = np.std(cidx_list)
     print(f"\nFinal c-index: {mean_cidx:.4f} ± {std_cidx:.4f}")
 
-    if __name__ == "__main__":
-        main()
+if __name__ == "__main__":
+    main()
