@@ -2,7 +2,6 @@ import os
 import pandas as pd
 import xgboost as xgb
 from sklearn.preprocessing import LabelEncoder
-from sklearn.metrics import make_scorer
 from lifelines.utils import concordance_index
 import numpy as np
 
@@ -176,6 +175,7 @@ def main():
     mean_cidx = np.mean(cidx_list)
     std_cidx = np.std(cidx_list)
     print(f"\nFinal c-index: {mean_cidx:.4f} ± {std_cidx:.4f}")
+
 
 if __name__ == "__main__":
     main()

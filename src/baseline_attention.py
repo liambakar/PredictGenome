@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import torch
-from model.genome_model import HallmarkSurvivalModel, MultimodalHallmarkSurvivalModel
-from model.gcn_model import GCNGenomicModel, CorrelationBasedGCNModel
+from model.genome_model import MultimodalHallmarkSurvivalModel
+from model.gcn_model import GCNGenomicModel
 from utils.datasets import (
     GenomicAndClinicalDataset,
     OnlyGenomicDataset

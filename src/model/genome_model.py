@@ -1,7 +1,6 @@
 import torch.nn as nn
 import torch.nn.functional as F
 import torch
-import math
 
 from model.modules import HallmarkFeatureProcessor, PositionalEncoding
 
@@ -150,44 +149,47 @@ class HallmarkSurvivalModel(nn.Module):
 
 class AttentionFusion(nn.Module):
     """Attention-based fusion module"""
+
     def __init__(self, hallmark_dim, clinical_dim, hidden_dim=128):
         super(AttentionFusion, self).__init__()
         self.hallmark_proj = nn.Linear(hallmark_dim, hidden_dim)
         self.clinical_proj = nn.Linear(clinical_dim, hidden_dim)
-        
+
         # Self-attention mechanism
         self.attention = nn.MultiheadAttention(
-            embed_dim=hidden_dim, 
-            num_heads=4, 
+            embed_dim=hidden_dim,
+            num_heads=4,
             batch_first=True
         )
-        
+
         # Cross-modal attention
         self.cross_attention = nn.MultiheadAttention(
             embed_dim=hidden_dim,
             num_heads=4,
             batch_first=True
         )
-        
+
         self.norm1 = nn.LayerNorm(hidden_dim)
         self.norm2 = nn.LayerNorm(hidden_dim)
-        
+
     def forward(self, hallmark_features, clinical_features):
         # Project to same dimension
-        h_proj = self.hallmark_proj(hallmark_features).unsqueeze(1)  # [B, 1, hidden_dim]
-        c_proj = self.clinical_proj(clinical_features).unsqueeze(1)   # [B, 1, hidden_dim]
-        
+        h_proj = self.hallmark_proj(
+            hallmark_features).unsqueeze(1)  # [B, 1, hidden_dim]
+        c_proj = self.clinical_proj(clinical_features).unsqueeze(
+            1)   # [B, 1, hidden_dim]
+
         # Concatenate into sequence
         combined = torch.cat([h_proj, c_proj], dim=1)  # [B, 2, hidden_dim]
-        
+
         # Self-attention
         attn_out, _ = self.attention(combined, combined, combined)
         attn_out = self.norm1(attn_out + combined)
-        
+
         # Cross-modal attention (hallmark attend to clinical)
         cross_out, _ = self.cross_attention(h_proj, c_proj, c_proj)
         cross_out = self.norm2(cross_out + h_proj)
-        
+
         # Fusion output
         fused = torch.cat([attn_out.flatten(1), cross_out.flatten(1)], dim=1)
         return fused
@@ -195,11 +197,12 @@ class AttentionFusion(nn.Module):
 
 class GatedFusion(nn.Module):
     """Gated fusion module"""
+
     def __init__(self, hallmark_dim, clinical_dim, output_dim=128):
         super(GatedFusion, self).__init__()
         self.hallmark_transform = nn.Linear(hallmark_dim, output_dim)
         self.clinical_transform = nn.Linear(clinical_dim, output_dim)
-        
+
         # Gating network
         self.gate_network = nn.Sequential(
             nn.Linear(hallmark_dim + clinical_dim, output_dim),
@@ -207,31 +210,32 @@ class GatedFusion(nn.Module):
             nn.Linear(output_dim, 2),  # Weights for 2 modalities
             nn.Softmax(dim=1)
         )
-        
+
         # Interaction learning
         self.interaction = nn.Sequential(
             nn.Linear(output_dim * 2, output_dim),
             nn.ReLU(),
             nn.Dropout(0.3)
         )
-        
+
     def forward(self, hallmark_features, clinical_features):
         # Transform to same dimension
         h_transformed = self.hallmark_transform(hallmark_features)
         c_transformed = self.clinical_transform(clinical_features)
-        
+
         # Compute gating weights
-        concat_features = torch.cat([hallmark_features, clinical_features], dim=1)
+        concat_features = torch.cat(
+            [hallmark_features, clinical_features], dim=1)
         gates = self.gate_network(concat_features)
-        
+
         # Weighted fusion
         weighted_h = h_transformed * gates[:, 0:1]
         weighted_c = c_transformed * gates[:, 1:2]
-        
+
         # Interaction learning
         interaction_input = torch.cat([weighted_h, weighted_c], dim=1)
         fused = self.interaction(interaction_input)
-        
+
         return fused
 
 
@@ -254,7 +258,7 @@ class MultimodalHallmarkSurvivalModel(nn.Module):
                  fusion_method='attention'):  # 'concat', 'attention', 'gated'
         super(MultimodalHallmarkSurvivalModel, self).__init__()
         self.fusion_method = fusion_method
-        
+
         self.hallmark_model = HallmarkSurvivalModel(
             M=M,
             N_CLASSES=N_CLASSES,
@@ -268,7 +272,7 @@ class MultimodalHallmarkSurvivalModel(nn.Module):
             num_transformer_heads=num_transformer_heads,
             num_transformer_layers=num_transformer_layers
         )
-        
+
         # Improved clinical feature processing
         self.clinical_fc = nn.Sequential(
             nn.Linear(clinical_input_dim, clinical_fc_units * 2),
@@ -280,18 +284,19 @@ class MultimodalHallmarkSurvivalModel(nn.Module):
             nn.ReLU(),
             nn.Dropout(dropout_rate)
         )
-        
+
         # Select fusion strategy
         if fusion_method == 'attention':
             self.fusion_layer = AttentionFusion(fc3_units, clinical_fc_units)
             fusion_output_dim = 256 + 128  # attention fusion output
         elif fusion_method == 'gated':
-            self.fusion_layer = GatedFusion(fc3_units, clinical_fc_units, output_dim=128)
+            self.fusion_layer = GatedFusion(
+                fc3_units, clinical_fc_units, output_dim=128)
             fusion_output_dim = 128
         else:  # concat
             self.fusion_layer = None
             fusion_output_dim = fc3_units + clinical_fc_units
-        
+
         # Improved classification network
         self.combined_fc = nn.Sequential(
             nn.Linear(fusion_output_dim, 128),
@@ -300,7 +305,7 @@ class MultimodalHallmarkSurvivalModel(nn.Module):
             nn.Dropout(dropout_rate),
             nn.Linear(128, N_CLASSES)
         )
-        
+
         # Add modality-specific regularization
         self.hallmark_l2_reg = 0.001
         self.clinical_l2_reg = 0.001
@@ -310,30 +315,30 @@ class MultimodalHallmarkSurvivalModel(nn.Module):
         hallmark_features = self.hallmark_model.forward_without_classification(
             list_of_hallmark_data
         )
-        
+
         # Clinical branch
         clinical_features = self.clinical_fc(clinical_data)
-        
+
         # Feature fusion
-        if self.fusion_method == 'attention':
+        if self.fusion_method == 'attention' and self.fusion_layer is not None:
             combined = self.fusion_layer(hallmark_features, clinical_features)
-        elif self.fusion_method == 'gated':
+        elif self.fusion_method == 'gated' and self.fusion_layer is not None:
             combined = self.fusion_layer(hallmark_features, clinical_features)
         else:  # concat
             combined = torch.cat([hallmark_features, clinical_features], dim=1)
-        
+
         # Final classification
         logits = self.combined_fc(combined)
         return logits
-    
+
     def get_regularization_loss(self):
         """Get regularization loss"""
         hallmark_reg = 0
         for param in self.hallmark_model.parameters():
             hallmark_reg += torch.norm(param, 2)
-        
+
         clinical_reg = 0
         for param in self.clinical_fc.parameters():
             clinical_reg += torch.norm(param, 2)
-            
+
         return self.hallmark_l2_reg * hallmark_reg + self.clinical_l2_reg * clinical_reg
